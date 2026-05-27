@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>遠端互動通知系統</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111827">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, "Microsoft JhengHei", sans-serif;
+      background: #0f172a;
+      color: #fff;
+    }
+    .container {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 18px;
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,.25);
+    }
+    h1 {
+      font-size: 24px;
+      margin: 8px 0 14px;
+      text-align: center;
+    }
+    h2 {
+      font-size: 18px;
+      margin: 0 0 12px;
+    }
+    .desc {
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 14px;
+      padding: 16px;
+      margin: 8px 0;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      color: #fff;
+      background: #2563eb;
+    }
+    button:active { transform: scale(.98); }
+    .secondary { background: #475569; }
+    .green { background: #16a34a; }
+    .orange { background: #ea580c; }
+    .red { background: #dc2626; }
+    .purple { background: #7c3aed; }
+    .hidden { display: none; }
+    .status {
+      font-size: 14px;
+      padding: 10px;
+      border-radius: 10px;
+      background: #1e293b;
+      color: #cbd5e1;
+      margin-bottom: 12px;
+    }
+    .log {
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .item {
+      background: #1e293b;
+      border-left: 5px solid #38bdf8;
+      border-radius: 10px;
+      padding: 12px;
+      margin: 10px 0;
+      line-height: 1.5;
+    }
+    .time {
+      color: #94a3b8;
+      font-size: 12px;
+    }
+    .top-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .small {
+      font-size: 13px;
+      padding: 12px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>遠端互動通知系統</h1>
+
+  <div id="rolePage" class="card">
+    <h2>選擇身分組</h2>
+    <p class="desc">發送方用來發出需求；接收方可多人同時開啟，收到通知後回覆狀態。</p>
+    <button onclick="chooseRole('sender')">我是發送方</button>
+    <button class="green" onclick="chooseRole('receiver')">我是接收方</button>
+    <button class="secondary small" onclick="enableNotify()">開啟手機通知 / 語音權限</button>
+  </div>
+
+  <div id="mainPage" class="hidden">
+    <div class="card">
+      <div class="top-actions">
+        <button class="secondary small" onclick="goBack()">切換身分</button>
+        <button class="secondary small" onclick="enableNotify()">開啟通知</button>
+      </div>
+      <div id="status" class="status">尚未連線</div>
+      <h2 id="panelTitle"></h2>
+
+      <div id="senderPanel" class="hidden">
+        <button class="red" onclick="sendRequest('我要大火')">🔥 我要大火</button>
+        <button class="orange" onclick="sendRequest('我要大地')">🌍 我要大地</button>
+        <button class="purple" onclick="sendRequest('我要通暢體魄')">💪 我要通暢體魄</button>
+        <button onclick="sendRequest('我全都要')">🔥🌍💪 我全都要</button>
+      </div>
+
+      <div id="receiverPanel" class="hidden">
+        <button class="green" onclick="sendReply('好的，現在幫你加')">✅ 好的，現在幫你加</button>
+        <button class="orange" onclick="sendReply('稍等一下，正在忙碌中，請耐心等待')">⏳ 稍等一下，正在忙碌中，請耐心等待</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>訊息紀錄</h2>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let currentRole = localStorage.getItem("role") || "";
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+if (currentRole) {
+  chooseRole(currentRole);
+}
+
+function chooseRole(role) {
+  currentRole = role;
+  localStorage.setItem("role", role);
+
+  document.getElementById("rolePage").classList.add("hidden");
+  document.getElementById("mainPage").classList.remove("hidden");
+
+  document.getElementById("senderPanel").classList.toggle("hidden", role !== "sender");
+  document.getElementById("receiverPanel").classList.toggle("hidden", role !== "receiver");
+
+  document.getElementById("panelTitle").innerText = role === "sender" ? "發送方按鈕" : "接收方回覆";
+
+  connect(role);
+}
+
+function goBack() {
+  localStorage.removeItem("role");
+  location.reload();
+}
+
+function connect(role) {
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${protocol}://${location.host}/ws/${role}`);
+
+  ws.onopen = () => {
+    setStatus("已連線");
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === "system") {
+      addLog("系統", data.message);
+      return;
+    }
+
+    addLog(data.from || "通知", data.message, data.time);
+
+    if (data.voice) {
+      speak(data.voice);
+      showNotification("遠端通知", data.message);
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus("連線中斷，3秒後重連...");
+    setTimeout(() => connect(role), 3000);
+  };
+
+  ws.onerror = () => {
+    setStatus("連線錯誤");
+  };
+}
+
+function sendRequest(text) {
+  sendData("request", text);
+  addLog("我發送", text);
+}
+
+function sendReply(text) {
+  sendData("reply", text);
+  addLog("我回覆", text);
+}
+
+function sendData(type, message) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    alert("尚未連線，請稍後再試");
+    return;
+  }
+  ws.send(JSON.stringify({ type, message }));
+}
+
+function addLog(from, message, time = "") {
+  const log = document.getElementById("log");
+  const div = document.createElement("div");
+  div.className = "item";
+  div.innerHTML = `
+    <strong>${from}</strong><br>
+    ${message}<br>
+    <span class="time">${time || new Date().toLocaleTimeString()}</span>
+  `;
+  log.prepend(div);
+}
+
+function setStatus(text) {
+  document.getElementById("status").innerText = text;
+}
+
+function speak(text) {
+  try {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "zh-TW";
+    utter.rate = 1;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utter);
+  } catch (e) {}
+}
+
+async function enableNotify() {
+  speak("通知已開啟");
+
+  if (!("Notification" in window)) {
+    alert("這個瀏覽器不支援通知");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+
+  if (permission === "granted") {
+    showNotification("通知已開啟", "之後收到訊息會提醒你");
+  } else {
+    alert("你尚未允許通知，請到瀏覽器設定開啟");
+  }
+}
+
+function showNotification(title, body) {
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification(title, {
+      body,
+      icon: "/static/icon-192.png"
+    });
+  }
+}
+</script>
+</body>
+</html>
